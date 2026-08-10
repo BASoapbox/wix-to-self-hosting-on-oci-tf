@@ -1,0 +1,35 @@
+# =============================================================================
+# Grav — yourdomain.com
+# =============================================================================
+# Deploy to: /mnt/grav-data/grav/compose/ on the Grav host (created by the
+# bootstrap script).
+#
+# Grav is flat-file — no database container. Bound to 127.0.0.1 only; Nginx
+# (host-level) proxies 80/443 to this container.
+
+services:
+  grav:
+    # Verified official image (getgrav/docker-grav on GitHub, published to
+    # Docker Hub as getgrav/grav) — multi-arch, arm64 included, so this runs
+    # natively on the A1.Flex host with no emulation. Grav auto-installs on
+    # first run if the mounted volume is empty; the bind mount below is the
+    # entire site (Grav's own layout is /var/www/html), not just user/.
+    image: getgrav/grav:latest
+    container_name: grav-app
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:2380:80"
+    volumes:
+      - /mnt/grav-data/grav/user-data:/var/www/html
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:80/"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks:
+      - grav-net
+
+networks:
+  grav-net:
+    driver: bridge

@@ -1,0 +1,75 @@
+# =============================================================================
+# Grav blog sample — terraform.tfvars.example
+# =============================================================================
+# Copy to terraform.tfvars and fill in your own values. Do not commit
+# terraform.tfvars — it's already in .gitignore.
+
+region              = "us-ashburn-1"
+config_file_profile = "DEFAULT"
+
+# Sensitive values are passed as environment variables instead of tfvars:
+#   export TF_VAR_tenancy_ocid="ocid1.tenancy.oc1..aaa..."
+#   export TF_VAR_ssh_public_key="$(cat ~/.ssh/id_ed25519.pub)"
+
+environment = "stage"
+
+# -----------------------------------------------------------------------------
+# Networking
+# -----------------------------------------------------------------------------
+vcn_cidr    = "192.168.0.0/24"
+subnet_cidr = "192.168.0.0/25"
+
+# Replace with your own public IP. Do not add 0.0.0.0/0 here — if you need
+# SSH access from a CI system with no fixed IP range, use a different
+# mechanism entirely (a bastion, a pull-based deploy, or a private overlay
+# network) rather than opening SSH to the whole internet.
+admin_ssh_source_cidrs = [
+  "203.0.113.10/32",
+]
+
+# -----------------------------------------------------------------------------
+# Grav host
+# -----------------------------------------------------------------------------
+# Check the Console's Limits page for your own tenancy's actual Always Free
+# Arm allowance before assuming the commonly-cited 4 OCPU / 24GB.
+availability_domain_name = "GrEI:US-ASHBURN-AD-1"
+
+grav_host_image_ocid = "ocid1.image.oc1.iad.replace..." # Ubuntu 22.04 Arm
+
+grav_host_ocpus                    = 2
+grav_host_memory_in_gbs            = 12
+grav_host_boot_volume_size_gb      = 50
+grav_host_block_volume_size_gb     = 50
+grav_host_block_volume_vpus_per_gb = 0 # "Lower Cost" tier — OCI's own default (10) bills separately from storage capacity
+
+# -----------------------------------------------------------------------------
+# DNS
+# -----------------------------------------------------------------------------
+dns_zone_name = "yourdomain.com"
+
+# Extra records for whichever provider handles inbound mail for this domain
+# (MX/SPF/etc). The Email Delivery module's own DKIM record is added
+# automatically — do not duplicate it here.
+# additional_dns_records = [
+#   { domain = "yourdomain.com", rtype = "MX", rdata = "10 mail.example.com." },
+#   { domain = "yourdomain.com", rtype = "TXT", rdata = "\"v=spf1 include:example.com ~all\"" },
+# ]
+
+# -----------------------------------------------------------------------------
+# Email Delivery
+# -----------------------------------------------------------------------------
+# vault_ocid / key_ocid reference an existing Vault + key (created outside
+# this Terraform) used only to store the generated SMTP credential.
+vault_ocid = "ocid1.vault.oc1.iad.replace..."
+key_ocid   = "ocid1.key.oc1.iad.replace..."
+
+email_sender_address = "noreply@yourdomain.com"
+email_smtp_user_name = "svc-email-grav"
+
+# -----------------------------------------------------------------------------
+# Tags
+# -----------------------------------------------------------------------------
+freeform_tags = {
+  ManagedBy = "terraform"
+  Project   = "grav-blog"
+}

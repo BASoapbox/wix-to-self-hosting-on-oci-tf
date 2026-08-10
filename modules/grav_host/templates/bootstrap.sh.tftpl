@@ -1,0 +1,125 @@
+#!/bin/bash
+# =============================================================================
+# Grav host bootstrap
+# =============================================================================
+# Rendered by Terraform (modules/grav_host) and passed as instance user_data,
+# so this runs automatically on first boot via cloud-init — no manual SSH
+# step needed for base setup. Idempotent: safe to re-run manually over SSH if
+# you need to repair something.
+#
+# Templated values (filled in by Terraform):
+#   ${block_volume_device}  — e.g. /dev/oracleoci/oraclevdb (Oracle Linux path;
+#                             falls back to dynamic detection on Ubuntu, since
+#                             oci-utils/the oracleoci symlinks aren't present there)
+#   ${environment}          — stage or prod
+
+set -euo pipefail
+exec > >(tee -a /var/log/grav-host-bootstrap.log) 2>&1
+echo "=== Grav host bootstrap starting: $(date -u) — environment=${environment} ==="
+
+# -----------------------------------------------------------------------------
+# 1. OS packages
+# -----------------------------------------------------------------------------
+export DEBIAN_FRONTEND=noninteractive
+apt-get update -y
+apt-get upgrade -y
+
+# -----------------------------------------------------------------------------
+# 2. Docker Engine + Compose plugin
+# -----------------------------------------------------------------------------
+if ! command -v docker &>/dev/null; then
+  install -m 0755 -d /etc/apt/keyrings
+  curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+  chmod a+r /etc/apt/keyrings/docker.asc
+
+  echo \
+    "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu \
+    $(. /etc/os-release && echo "$VERSION_CODENAME") stable" \
+    | tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+  apt-get update -y
+  apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+fi
+
+systemctl enable --now docker
+
+# Let the ubuntu user run docker without sudo
+usermod -aG docker ubuntu || true
+
+# -----------------------------------------------------------------------------
+# 3. Nginx
+# -----------------------------------------------------------------------------
+apt-get install -y nginx certbot python3-certbot-nginx
+systemctl enable nginx
+
+# -----------------------------------------------------------------------------
+# 4. OS firewall (ufw) — the OCI security list/NSG is open on 80/443 already
+#    (see modules/grav_host), but ufw blocks it at the OS level until
+#    explicitly opened.
+# -----------------------------------------------------------------------------
+apt-get install -y ufw
+ufw allow OpenSSH
+ufw allow 80/tcp
+ufw allow 443/tcp
+ufw --force enable
+
+# -----------------------------------------------------------------------------
+# 5. Format and mount the dedicated block volume for Grav's content
+# -----------------------------------------------------------------------------
+BLOCK_DEVICE="${block_volume_device}"
+MOUNT_POINT="/mnt/grav-data"
+
+mkdir -p "$MOUNT_POINT"
+
+# Fall back to dynamic detection if the passed-in path doesn't exist. It
+# won't on Ubuntu: the /dev/oracleoci/oraclevdb symlinks come from oci-utils,
+# which ships on Oracle Linux images but not Ubuntu — on Ubuntu the data
+# volume just shows up as a plain kernel-assigned disk (e.g. /dev/sdb).
+# Detect it as "the whole disk that isn't the root disk" — this module
+# always attaches exactly one data volume, so this is unambiguous.
+if [ ! -b "$BLOCK_DEVICE" ]; then
+  ROOT_PARTITION=$(findmnt -n -o SOURCE /)
+  ROOT_DISK=$(lsblk -no pkname "$ROOT_PARTITION" 2>/dev/null || true)
+  DETECTED=$(lsblk -dno NAME,TYPE | awk '$2=="disk"{print $1}' | grep -v "^$${ROOT_DISK}$" | head -n1)
+  if [ -z "$DETECTED" ]; then
+    echo "ERROR: could not find the data volume disk (expected $BLOCK_DEVICE, root disk is $ROOT_DISK)." >&2
+    lsblk >&2
+    exit 1
+  fi
+  BLOCK_DEVICE="/dev/$DETECTED"
+  echo "${block_volume_device} not present — detected data volume at $BLOCK_DEVICE instead"
+fi
+
+# Only format if the device has no filesystem yet — never re-format an
+# existing volume (would destroy live site content on instance rebuild/replace).
+if ! blkid "$BLOCK_DEVICE" &>/dev/null; then
+  echo "No filesystem detected on $BLOCK_DEVICE — formatting as ext4"
+  mkfs.ext4 -F "$BLOCK_DEVICE"
+else
+  echo "$BLOCK_DEVICE already has a filesystem — skipping format"
+fi
+
+# Mount by UUID (device names like /dev/oracleoci/oraclevdb are stable in OCI,
+# but UUID is the safer general practice for /etc/fstab).
+BLOCK_UUID=$(blkid -s UUID -o value "$BLOCK_DEVICE")
+
+if ! grep -q "$BLOCK_UUID" /etc/fstab; then
+  echo "UUID=$BLOCK_UUID $MOUNT_POINT ext4 defaults,nofail 0 2" >> /etc/fstab
+fi
+
+mount -a
+chown -R ubuntu:ubuntu "$MOUNT_POINT"
+
+# -----------------------------------------------------------------------------
+# 6. Working directory structure for Grav
+# -----------------------------------------------------------------------------
+# Grav: flat-file CMS, no database — just content + compose file.
+GRAV_DIR="$MOUNT_POINT/grav"
+mkdir -p "$GRAV_DIR"/{user-data,compose}
+chown -R ubuntu:ubuntu "$GRAV_DIR"
+
+echo "=== Grav host bootstrap complete: $(date -u) ==="
+echo "Next steps (manual):"
+echo "  Grav:  scp docker/grav/docker-compose.yml + .env to $GRAV_DIR/compose/, docker compose up -d"
+echo "  Nginx: scp docker/nginx/*.conf to /etc/nginx/sites-available/, symlink into sites-enabled, reload"
+echo "  DNS:   terraform output dns_nameservers / dns_zone_ocid, then run go-live.sh for SSL"
