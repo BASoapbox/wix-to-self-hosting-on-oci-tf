@@ -96,6 +96,51 @@ Storage buckets, VCN peering/DRG, a generic multi-instance map, or a Vault
    to search engines, and makes any analytics property miss whichever
    hostname it isn't pointed at.
 
+8. Confirm your content is actually on the block volume:
+
+   ```bash
+   df -h /mnt/grav-data/grav/user-data   # want the block device, not the boot disk
+   ```
+
+   See **Verify the volume is really being used** below for why this is worth
+   thirty seconds.
+
+## Verify the volume is really being used
+
+The block volume exists so your content survives the instance being rebuilt —
+including via `terraform apply -replace='module.grav_host.oci_core_instance.grav_host'`,
+which this repo documents as the way to re-run a changed bootstrap script.
+That guarantee is only real if the content is actually *on* the volume.
+
+It is easy for this to drift and produce no symptom at all. The bootstrap
+script mounts the volume at `/mnt/grav-data`, but nothing stops a later
+deploy — a migration from another platform, a hand-run `docker compose`, a
+path typo — from writing content somewhere on the boot disk instead. The
+site works perfectly either way. You find out at rebuild time, which is the
+worst possible moment.
+
+```bash
+# The device backing your content. Want /dev/sdb (or whatever the data
+# volume is) — NOT /dev/sda1, the boot disk.
+df -h /mnt/grav-data/grav/user-data
+
+# What every running container actually reads from
+docker ps --format '{{.Names}}' | while read c; do echo "[$c]"; \
+  docker inspect "$c" --format '{{range .Mounts}}  {{.Source}} -> {{.Destination}}{{println}}{{end}}'; done
+```
+
+The second command is also how you catch a stack you forgot was running.
+A container left over from a previous platform can sit for weeks holding
+the volume and consuming memory, with no DNS record or nginx site pointing
+at it to remind you it exists.
+
+If you do need to relocate content onto the volume later, two things matter:
+copy with `rsync -aHAX --numeric-ids` (database data directories are owned
+by container UIDs that have no matching named user on the host — without
+`--numeric-ids` the database will not restart), and rename the old
+directory aside instead of deleting it, so rollback stays trivial until
+you have verified the move.
+
 ## Two firewall layers, not one
 
 OCI enforces both the subnet's **security list** and the instance's **NSG**
