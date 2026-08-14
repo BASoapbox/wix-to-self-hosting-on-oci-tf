@@ -88,6 +88,14 @@ Storage buckets, VCN peering/DRG, a generic multi-instance map, or a Vault
    sudo bash docker/scripts/go-live.sh yourdomain.com
    ```
 
+7. Pick a canonical hostname. Certbot leaves both `yourdomain.com` and
+   `www.yourdomain.com` serving identical content with no redirect between
+   them — see **Making the apex canonical** in
+   [docker/nginx/ssl-reference.md](./docker/nginx/ssl-reference.md). Skipping
+   this is not fatal, but it splits inbound links, reads as duplicate content
+   to search engines, and makes any analytics property miss whichever
+   hostname it isn't pointed at.
+
 ## Two firewall layers, not one
 
 OCI enforces both the subnet's **security list** and the instance's **NSG**
