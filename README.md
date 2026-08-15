@@ -82,6 +82,12 @@ Storage buckets, VCN peering/DRG, a generic multi-instance map, or a Vault
    cd /mnt/grav-data/grav/compose && docker compose up -d
    ```
 
+   Grav auto-installs into the empty volume on first run. Once you start
+   copying real content in, read **Content ownership** below first — the
+   container writes as `www-data` and your `scp` does not, and the mismatch
+   surfaces as an unexplained "Couldn't save" in the admin UI rather than as
+   a permissions error.
+
 6. Once DNS has propagated, get a real certificate:
 
    ```bash
@@ -104,6 +110,55 @@ Storage buckets, VCN peering/DRG, a generic multi-instance map, or a Vault
 
    See **Verify the volume is really being used** below for why this is worth
    thirty seconds.
+
+## Content ownership: the container is `www-data`, you are not
+
+The single most confusing failure in this stack, and worth understanding
+before you copy any content in.
+
+The Grav container serves everything as **`www-data`** (uid/gid 33 in the
+official image, and the same on Ubuntu — the ids lining up is what makes the
+bind mount work). Anything you copy in from outside — an `scp` from your
+laptop, a migration script, an editor over SSH — lands owned by **whoever
+ran the copy**, normally `ubuntu`.
+
+When those disagree, Grav's admin UI reports a flat **"Couldn't save"** on
+every edit. It does not say "permission denied", it does not name a file,
+and the real cause appears only in the container log. It is easy to spend an
+afternoon suspecting the application.
+
+The bootstrap script sets this up correctly to begin with: `user-data` is
+owned by `www-data`, group-writable, with setgid on directories so new files
+inherit the `www-data` group, and the `ubuntu` user is added to that group.
+(Group membership applies at next login — reconnect your SSH session.)
+
+**What bootstrap cannot do is keep it correct.** A bulk copy still lands
+files owned by you, and `umask 022` means group-write is not granted even
+though the group is right. After any migration, restore, or bulk `scp` into
+`user-data`, run both halves:
+
+```bash
+sudo chown -R www-data:www-data /mnt/grav-data/grav/user-data
+sudo chmod -R g+rwX          /mnt/grav-data/grav/user-data
+docker exec -u www-data grav-app bin/grav clearcache
+```
+
+`chown` alone is the common mistake — it fixes ownership but not the mode
+bits, so newly created files still arrive without group-write and the
+problem comes back in a different shape.
+
+Better still, avoid the whole class of problem by writing as the right user
+in the first place:
+
+```bash
+sudo -u www-data cp -r /tmp/incoming/* /mnt/grav-data/grav/user-data/user/pages/
+```
+
+To confirm what the container actually sees:
+
+```bash
+docker exec grav-app ls -la /var/www/html/user/pages | head
+```
 
 ## Verify the volume is really being used
 

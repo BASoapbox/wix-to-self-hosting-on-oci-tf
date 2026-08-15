@@ -116,7 +116,37 @@ chown -R ubuntu:ubuntu "$MOUNT_POINT"
 # Grav: flat-file CMS, no database — just content + compose file.
 GRAV_DIR="$MOUNT_POINT/grav"
 mkdir -p "$GRAV_DIR"/{user-data,compose}
-chown -R ubuntu:ubuntu "$GRAV_DIR"
+
+# Ownership matters here, and getting it wrong produces a confusing failure.
+#
+# The Grav container serves everything as www-data (uid/gid 33 in the
+# official image, and the same on Ubuntu — the ids line up, which is what
+# makes a bind mount work at all). Content bind-mounted from the host must
+# therefore be writable by www-data, or Grav's admin UI reports a flat
+# "Couldn't save" on every edit, with the real cause only visible in the
+# container log. It does not present as a permissions error.
+#
+# So: user-data belongs to www-data, not to ubuntu. compose/ stays with
+# ubuntu — only a human ever touches it, and the container never reads it.
+#
+# nginx (installed in step 3 above) creates the www-data account, so it
+# already exists by the time we get here.
+chown -R ubuntu:ubuntu "$GRAV_DIR/compose"
+chown -R www-data:www-data "$GRAV_DIR/user-data"
+
+# Group-write, so the ubuntu user can also edit content directly (scp, an
+# editor over SSH) without sudo on every file.
+chmod -R g+rwX "$GRAV_DIR/user-data"
+
+# setgid on directories: anything created inside later inherits the
+# www-data group instead of the creator's primary group. Without this, a
+# file you scp in lands with group `ubuntu` and www-data cannot write it.
+find "$GRAV_DIR/user-data" -type d -exec chmod g+s {} +
+
+# Put ubuntu in the www-data group so that group-write is actually usable.
+# Takes effect on the next login — an already-open SSH session keeps its
+# old group memberships until it reconnects.
+usermod -aG www-data ubuntu || true
 
 echo "=== Grav host bootstrap complete: $(date -u) ==="
 echo "Next steps (manual):"

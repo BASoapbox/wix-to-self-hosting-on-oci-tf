@@ -20,6 +20,10 @@ services:
     ports:
       - "127.0.0.1:2380:80"
     volumes:
+      # The container serves this as www-data (uid/gid 33), so the host side
+      # must be owned by www-data — not by the user who copied files in.
+      # Bootstrap sets that up; a later bulk copy will break it again. See
+      # "Content ownership" in the README before migrating content in.
       - /mnt/grav-data/grav/user-data:/var/www/html
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:80/"]
