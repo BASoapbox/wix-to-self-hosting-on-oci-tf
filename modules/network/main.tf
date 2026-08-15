@@ -1,6 +1,12 @@
 # One VCN, one public subnet — everything a single public-facing Grav host
 # needs. No private subnet/NAT/Service Gateway and no DRG/VCN-peering here;
 # add those back if you outgrow a single instance.
+#
+# The host is public because nothing sits in front of it: there is no load
+# balancer, the DNS A record points straight at the instance, and Certbot
+# proves domain ownership over port 80. None of that is a Grav requirement.
+# See "Why the instance is in a public subnet" in the README for what a
+# private-subnet version would need, and why this bundle skips it.
 
 resource "oci_core_vcn" "vcn" {
   compartment_id = var.compartment_ocid

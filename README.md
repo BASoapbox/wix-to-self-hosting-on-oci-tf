@@ -206,6 +206,54 @@ without the other, traffic will silently stop reaching the instance with no
 obvious error on either side. Check both `sl-<environment>-public` and
 `nsg-<environment>-grav-host` if something that should be reachable isn't.
 
+## Why the instance is in a public subnet
+
+Worth stating outright, because it is the kind of default that hardens into
+an assumption nobody revisits.
+
+**Nothing about Grav requires it.** Grav is a flat-file PHP app bound to
+`127.0.0.1:2380` inside its container; it never sees the public IP. Nginx on
+the host is the only process listening on a public interface.
+
+It falls out of three properties of this bundle, none of them the
+application:
+
+| Dependency | Where |
+|---|---|
+| No load balancer exists here | nothing sits in front, so the instance must be reachable itself |
+| The DNS A record points at the instance | `target_public_ip = module.grav_host.public_ip` in `main.tf` |
+| Certbot uses an HTTP-01 challenge | `certbot --nginx` in `docker/scripts/go-live.sh` — Let's Encrypt has to reach port 80 on the host being certified |
+
+**A private subnet is achievable, and this bundle deliberately omits the
+pieces for it.** `modules/network` creates one VCN and one public subnet and
+nothing else — no private subnet, no NAT Gateway, no Service Gateway. To
+move the host off the public internet you would add:
+
+1. A load balancer in the public subnet holding the public IP and forwarding
+   to a private instance. Check the Always Free load balancer allowance on
+   your own Console's **Limits, Quotas and Usage** page before designing
+   around it — the same advice as the OCPU allowance in *Prerequisites*, and
+   for the same reason.
+2. A NAT Gateway, so the private instance can still reach the internet
+   outbound for `apt`, image pulls and ACME.
+3. DNS pointed at the load balancer instead of the instance.
+4. Certificates either terminated at the load balancer, or issued with a
+   **DNS-01** challenge instead of HTTP-01 — a natural fit here, since this
+   stack already manages the zone in OCI DNS and could automate the record.
+5. OCI Bastion or a jump host for SSH.
+
+**This bundle does not do that, on purpose.** The host already sits behind
+three independent gates — the subnet's security list, the instance's NSG,
+and `ufw` on the host — with only 22/80/443 reachable and no application
+port exposed. The gain from going private is mostly removing the SSH
+surface; the cost is a load balancer that becomes a new single point of
+failure, a bastion, and a certificate redesign, on what is by design a
+single-instance stack.
+
+Reasonable triggers to revisit: a second instance appears, SSH from
+arbitrary addresses stops being acceptable, or you want to terminate TLS
+somewhere other than the box serving the site.
+
 ## Naming convention
 
 Resources follow `<type>-<environment>-<role>`, e.g. `nsg-stage-grav-host`,
